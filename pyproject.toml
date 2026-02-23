@@ -34,9 +34,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/itstransdata/superset-migrator"
-Repository = "https://github.com/itstransdata/superset-migrator"
-"Bug Tracker" = "https://github.com/itstransdata/superset-migrator/issues"
+Homepage = "https://github.com/w4lto/superset-migrator"
+Repository = "https://github.com/w4lto/superset-migrator"
+"Bug Tracker" = "https://github.com/w4lto/superset-migrator/issues"
 
 [project.scripts]
 superset-migrator = "superset_migrator.cli:run"
