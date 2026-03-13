@@ -725,7 +725,8 @@ def _sync_datasets(client: SupersetClient, dataset_infos: list):
                         console.print(f"  [yellow]⚠[/yellow] {ds_info.table_name} [dim](sincronização não necessária ou já atualizado)[/dim]")
                         skipped += 1
             else:
-                console.print(f"  [dim]–[/dim] {ds_info.table_name} [dim](dataset não encontrado, pode já estar sincronizado)[/dim]")
+                logger.log_debug(f"Dataset '{ds_info.table_name}' (db='{ds_info.database_name}') não encontrado no destino")
+                console.print(f"  [dim]–[/dim] {ds_info.table_name} [dim](dataset não encontrado no banco '{ds_info.database_name}', pode já estar sincronizado)[/dim]")
                 skipped += 1
 
         except Exception as e:

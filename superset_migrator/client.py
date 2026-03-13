@@ -333,6 +333,10 @@ class SupersetClient:
         resp.raise_for_status()
         result = resp.json().get("result", [])
 
+        logger.log_debug(f"list_datasets: {len(result)} dataset(s) retornados da API")
+        if len(result) >= 1000:
+            logger.log_debug("list_datasets: ATENÇÃO — limite de 1000 atingido, pode haver datasets não listados")
+
         # Filtra localmente se necessário
         if search:
             search_lower = search.lower()
@@ -341,15 +345,48 @@ class SupersetClient:
         return result
 
     def get_dataset_by_name(self, table_name: str, database_name: str = "") -> dict | None:
-        """Busca um dataset pelo nome da tabela (e opcionalmente banco)."""
+        """Busca um dataset pelo nome da tabela (e opcionalmente banco).
+
+        Usa fallback em camadas:
+        1. Match exato table_name + database_name
+        2. Match exato table_name apenas
+        3. Match case-insensitive table_name + database_name
+        4. Match case-insensitive table_name apenas
+        """
         datasets = self.list_datasets(search=table_name)
+
+        table_lower = table_name.lower()
+        db_lower = database_name.lower() if database_name else ""
+
+        # Tier 1: match exato table_name + database_name
+        if database_name:
+            for ds in datasets:
+                ds_db = ds.get("database", {}).get("database_name", "")
+                if ds.get("table_name") == table_name and ds_db == database_name:
+                    logger.log_debug(f"get_dataset_by_name: '{table_name}' encontrado via match exato (tier 1)")
+                    return ds
+
+        # Tier 2: match exato table_name apenas
         for ds in datasets:
             if ds.get("table_name") == table_name:
-                if database_name:
-                    if ds.get("database", {}).get("database_name") == database_name:
-                        return ds
-                else:
+                logger.log_debug(f"get_dataset_by_name: '{table_name}' encontrado via table_name exato (tier 2)")
+                return ds
+
+        # Tier 3: match case-insensitive table_name + database_name
+        if database_name:
+            for ds in datasets:
+                ds_db = ds.get("database", {}).get("database_name", "")
+                if ds.get("table_name", "").lower() == table_lower and ds_db.lower() == db_lower:
+                    logger.log_debug(f"get_dataset_by_name: '{table_name}' encontrado via case-insensitive + db (tier 3)")
                     return ds
+
+        # Tier 4: match case-insensitive table_name apenas
+        for ds in datasets:
+            if ds.get("table_name", "").lower() == table_lower:
+                logger.log_debug(f"get_dataset_by_name: '{table_name}' encontrado via case-insensitive (tier 4)")
+                return ds
+
+        logger.log_debug(f"get_dataset_by_name: '{table_name}' (db='{database_name}') não encontrado em nenhum tier")
         return None
 
     def sync_dataset_columns(self, dataset_id: int) -> bool:
