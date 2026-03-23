@@ -395,11 +395,18 @@ class SupersetClient:
         Equivalente a "Sync columns from source" na UI.
         """
         csrf = self._get_csrf_token()
+        url = f"{self.base_url}/api/v1/dataset/{dataset_id}/refresh"
         resp = self._http.put(
-            f"{self.base_url}/api/v1/dataset/{dataset_id}/refresh",
+            url,
             headers={"X-CSRFToken": csrf, "Referer": self.base_url},
         )
-        return resp.status_code == 200
+        logger.log_request("PUT", url, resp.status_code)
+        if 200 <= resp.status_code < 300:
+            return True
+        logger.log_error(
+            f"sync_dataset_columns: dataset_id={dataset_id} retornou HTTP {resp.status_code}: {resp.text[:200]}"
+        )
+        return False
 
     def close(self):
         self._http.close()

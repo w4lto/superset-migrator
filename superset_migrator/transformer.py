@@ -49,6 +49,7 @@ class DatasetInfo:
     file_path: str          # caminho dentro do ZIP
     table_name: str         # nome da tabela/dataset
     database_name: str      # nome do banco de dados
+    has_jinja: bool = False # True se o campo sql contém macros Jinja
 
 
 @dataclass
@@ -102,11 +103,14 @@ def extract_dataset_infos(zip_bytes: bytes) -> list[DatasetInfo]:
                 data = yaml.safe_load(content) or {}
                 table_name = data.get("table_name", "")
                 database_name = data.get("database_name", "")
+                sql = data.get("sql", "") or ""
+                has_jinja = "{{" in sql or "{%" in sql
                 if table_name:
                     infos.append(DatasetInfo(
                         file_path=name,
                         table_name=table_name,
                         database_name=database_name,
+                        has_jinja=has_jinja,
                     ))
     return infos
 
