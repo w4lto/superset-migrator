@@ -180,12 +180,12 @@ reutilizados automaticamente em migrações futuras.
 A tabela de bancos mostra o status de cada ambiente:
 
 ```
-╭─────────────────────────────────────────────────────────────────────╮
-│ Banco (nome no Superset)  │ devel      │ staging    │ production    │
-├───────────────────────────┼────────────┼────────────┼───────────────┤
+╭──────────────────────────────────────────────────────────────────────╮
+│ Banco (nome no Superset)  │ devel      │ staging    │ production     │
+├───────────────────────────┼────────────┼────────────┼────────────────┤
 │ SQL Server Principal      │ ✓ sa:***@… │ ✓ sa:***@… │ ✗ não mapeado │
 │ ClickHouse Analytics      │ ✓ user:*** │ ✓ user:*** │ ✓ user:***    │
-╰─────────────────────────────────────────────────────────────────────╯
+╰──────────────────────────────────────────────────────────────────────╯
 ```
 
 ### Sincronização de datasets
