@@ -712,6 +712,12 @@ def _sync_datasets(client: SupersetClient, dataset_infos: list):
 
     for ds_info in dataset_infos:
         try:
+            if ds_info.has_jinja:
+                logger.log_debug(f"Dataset '{ds_info.table_name}' tem template Jinja no SQL — sync ignorado")
+                console.print(f"  [yellow]–[/yellow] {ds_info.table_name} [dim](dataset virtual com Jinja — realizar sync manual)[/dim]")
+                skipped += 1
+                continue
+
             # Busca o dataset pelo nome
             dataset = client.get_dataset_by_name(ds_info.table_name, ds_info.database_name)
 
@@ -722,10 +728,12 @@ def _sync_datasets(client: SupersetClient, dataset_infos: list):
                         console.print(f"  [green]✓[/green] {ds_info.table_name}")
                         success += 1
                     else:
-                        console.print(f"  [yellow]⚠[/yellow] {ds_info.table_name} [dim](sincronização não necessária ou já atualizado)[/dim]")
-                        skipped += 1
+                        logger.log_error(f"Sync falhou para '{ds_info.table_name}' (dataset_id={dataset_id})")
+                        console.print(f"  [red]✗[/red] {ds_info.table_name} [dim](sync falhou — verifique os logs)[/dim]")
+                        failed.append(ds_info.table_name)
             else:
-                console.print(f"  [dim]–[/dim] {ds_info.table_name} [dim](dataset não encontrado, pode já estar sincronizado)[/dim]")
+                logger.log_debug(f"Dataset '{ds_info.table_name}' (db='{ds_info.database_name}') não encontrado no destino")
+                console.print(f"  [dim]–[/dim] {ds_info.table_name} [dim](dataset não encontrado no banco '{ds_info.database_name}', pode já estar sincronizado)[/dim]")
                 skipped += 1
 
         except Exception as e:
@@ -740,8 +748,13 @@ def _sync_datasets(client: SupersetClient, dataset_infos: list):
         console.print(f"\n[green]✓ {success}/{total} dataset(s) sincronizado(s)[/green]")
         if skipped > 0:
             console.print(f"[dim]  ({skipped} ignorado(s) ou já atualizados)[/dim]")
+        if failed:
+            console.print(f"[red]  ✗ {len(failed)} falha(s): {', '.join(failed)}[/red]")
     else:
-        console.print(f"\n[dim]Nenhum dataset precisou de sincronização.[/dim]")
+        if failed:
+            console.print(f"\n[red]✗ Nenhum dataset sincronizado. {len(failed)} falha(s): {', '.join(failed)}[/red]")
+        else:
+            console.print(f"\n[dim]Nenhum dataset precisou de sincronização.[/dim]")
 
 
 def _interactive_list(cfg: Config):

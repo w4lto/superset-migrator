@@ -26,3 +26,4 @@ env/
 
 # Configuração local (contém senhas!)
 ~/.superset-migrator/
+*.zip
