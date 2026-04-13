@@ -499,3 +499,92 @@ def print_export_report(report, output_path: str):
 def print_success_import(target_env: str):
     """Exibe mensagem de sucesso após importação."""
     console.print(f"\n[bold green]✓ Dashboard importado com sucesso no ambiente '{target_env}'![/bold green]")
+
+
+# ── RLS / Roles ───────────────────────────────────────────────────────────────
+
+def prompt_rls_mode() -> str:
+    """Pergunta ao usuário como deseja mapear datasets a regras de RLS.
+
+    Retorna 'bulk' ou 'individual'.
+    """
+    options = {
+        "Aplicar todos os datasets às mesmas regras": "bulk",
+        "Configurar individualmente por dataset":     "individual",
+    }
+    selected = _ask(questionary.select(
+        "Modo de vinculação às regras de RLS:",
+        choices=list(options.keys()),
+        style=STYLE,
+    ))
+    return options[selected]
+
+
+def prompt_select_rls_rules(rls_rules: list[dict], dataset_label: str = "") -> list[dict]:
+    """Seleção múltipla de regras de RLS. Retorna lista de dicts das regras escolhidas.
+
+    Se dataset_label for informado, exibe o nome do dataset na pergunta (modo individual).
+    """
+    choices = []
+    id_to_rule = {}
+    for rule in rls_rules:
+        label = f"[{rule['id']}] {rule.get('name', '?')}  ({rule.get('filter_type', '')})"
+        choices.append(label)
+        id_to_rule[label] = rule
+
+    question = (
+        f"Dataset '{dataset_label}' — Selecionar regras de RLS:"
+        if dataset_label else
+        "Selecionar regras de RLS para todos os datasets:"
+    )
+
+    selected_labels = _ask(questionary.checkbox(
+        question,
+        choices=choices,
+        style=STYLE,
+    ))
+
+    if not selected_labels:
+        return []
+    return [id_to_rule[label] for label in selected_labels]
+
+
+def prompt_manual_role_ids() -> list[dict]:
+    """Solicita IDs de papéis manualmente quando a API de listagem não está disponível.
+
+    Retorna lista de dicts {id, name} prontos para uso em add_dataset_permissions_to_role.
+    """
+    raw = _ask(questionary.text(
+        "Digite os IDs dos papéis separados por vírgula (ex: 1,3,5):",
+        style=STYLE,
+        validate=lambda v: (
+            True if v.strip() and all(p.strip().isdigit() for p in v.split(",") if p.strip())
+            else "Informe apenas números inteiros separados por vírgula"
+        ),
+    ))
+
+    if not raw or not raw.strip():
+        return []
+
+    ids = [int(p.strip()) for p in raw.split(",") if p.strip().isdigit()]
+    return [{"id": rid, "name": f"Papel #{rid}"} for rid in ids]
+
+
+def prompt_select_roles(roles: list[dict]) -> list[dict]:
+    """Seleção múltipla de papéis (roles). Retorna lista de dicts dos roles escolhidos."""
+    choices = []
+    id_to_role = {}
+    for role in roles:
+        label = f"[{role['id']}] {role.get('name', '?')}"
+        choices.append(label)
+        id_to_role[label] = role
+
+    selected_labels = _ask(questionary.checkbox(
+        "Selecione os papéis (roles) para adicionar acesso aos datasets:",
+        choices=choices,
+        style=STYLE,
+    ))
+
+    if not selected_labels:
+        return []
+    return [id_to_role[label] for label in selected_labels]

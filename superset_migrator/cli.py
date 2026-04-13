@@ -540,12 +540,13 @@ def _interactive_import(cfg: Config):
         client.close()
         return
 
-    # 5. Sincronizar datasets (todos de uma vez)
+    # 5. Pós-importação: sync, RLS e Roles
     if all_datasets:
         # Remove duplicados
         unique_datasets = {(d.table_name, d.database_name): d for d in all_datasets}
         unique_list = list(unique_datasets.values())
 
+        # 5a. Sincronizar colunas dos datasets
         sync = ui._ask(ui.questionary.confirm(
             f"Sincronizar colunas dos {len(unique_list)} dataset(s)?",
             default=True,
@@ -553,7 +554,36 @@ def _interactive_import(cfg: Config):
         ))
 
         if sync:
-            _sync_datasets(client, unique_list)
+            resolved_datasets = _sync_datasets(client, unique_list)
+        else:
+            resolved_datasets = _resolve_dataset_ids(client, unique_list)
+
+        if resolved_datasets:
+            # 5b. Adicionar datasets a regras de RLS
+            try:
+                rls_rules = client.list_rls_rules()
+            except Exception:
+                rls_rules = []
+
+            if rls_rules:
+                add_rls = ui._ask(ui.questionary.confirm(
+                    "Adicionar datasets às regras de RLS no ambiente de destino?",
+                    default=False,
+                    style=ui.STYLE,
+                ))
+                if add_rls:
+                    _apply_rls_to_datasets(client, resolved_datasets, rls_rules)
+            else:
+                console.print("[dim]Nenhuma regra de RLS encontrada no ambiente de destino.[/dim]")
+
+            # 5c. Adicionar permissão de acesso aos datasets em roles
+            add_roles = ui._ask(ui.questionary.confirm(
+                "Adicionar permissão de acesso aos datasets em algum papel (role)?",
+                default=False,
+                style=ui.STYLE,
+            ))
+            if add_roles:
+                _add_datasets_to_roles(client, resolved_datasets)
 
     client.close()
     console.print()
@@ -702,19 +732,34 @@ def _verify_databases_exist(client: SupersetClient, zip_files: list[Path], cfg: 
     return continue_anyway
 
 
-def _sync_datasets(client: SupersetClient, dataset_infos: list):
-    """Sincroniza colunas dos datasets após importação."""
+def _sync_datasets(client: SupersetClient, dataset_infos: list) -> list[dict]:
+    """Sincroniza colunas dos datasets após importação.
+
+    Retorna lista de dicts {id, table_name, database_name} dos datasets encontrados.
+    """
     console.print(f"\n[dim]🔄 Sincronizando {len(dataset_infos)} dataset(s)...[/dim]")
 
     success = 0
     skipped = 0
     failed = []
+    resolved_datasets: list[dict] = []
 
     for ds_info in dataset_infos:
         try:
             if ds_info.has_jinja:
                 logger.log_debug(f"Dataset '{ds_info.table_name}' tem template Jinja no SQL — sync ignorado")
                 console.print(f"  [yellow]–[/yellow] {ds_info.table_name} [dim](dataset virtual com Jinja — realizar sync manual)[/dim]")
+                # Ainda resolve o ID para permitir vincular a RLS/Roles
+                try:
+                    ds = client.get_dataset_by_name(ds_info.table_name, ds_info.database_name)
+                    if ds and ds.get("id"):
+                        resolved_datasets.append({
+                            "id": ds["id"],
+                            "table_name": ds_info.table_name,
+                            "database_name": ds_info.database_name,
+                        })
+                except Exception:
+                    pass
                 skipped += 1
                 continue
 
@@ -723,6 +768,12 @@ def _sync_datasets(client: SupersetClient, dataset_infos: list):
 
             if dataset:
                 dataset_id = dataset.get("id")
+                if dataset_id:
+                    resolved_datasets.append({
+                        "id": dataset_id,
+                        "table_name": ds_info.table_name,
+                        "database_name": ds_info.database_name,
+                    })
                 with console.status(f"Sincronizando '{ds_info.table_name}'..."):
                     if client.sync_dataset_columns(dataset_id):
                         console.print(f"  [green]✓[/green] {ds_info.table_name}")
@@ -755,6 +806,122 @@ def _sync_datasets(client: SupersetClient, dataset_infos: list):
             console.print(f"\n[red]✗ Nenhum dataset sincronizado. {len(failed)} falha(s): {', '.join(failed)}[/red]")
         else:
             console.print(f"\n[dim]Nenhum dataset precisou de sincronização.[/dim]")
+
+    return resolved_datasets
+
+
+def _resolve_dataset_ids(client: SupersetClient, dataset_infos: list) -> list[dict]:
+    """Resolve nomes de datasets para {id, table_name, database_name} sem sync de colunas.
+
+    Inclui datasets com Jinja — sync é ignorado, mas o ID é necessário para RLS/Roles.
+    """
+    resolved: list[dict] = []
+    for ds_info in dataset_infos:
+        try:
+            dataset = client.get_dataset_by_name(ds_info.table_name, ds_info.database_name)
+            if dataset and dataset.get("id"):
+                resolved.append({
+                    "id": dataset["id"],
+                    "table_name": ds_info.table_name,
+                    "database_name": ds_info.database_name,
+                })
+        except Exception as e:
+            logger.log_error(f"_resolve_dataset_ids: erro para '{ds_info.table_name}': {e}")
+    return resolved
+
+
+def _apply_rls_to_datasets(
+    client: SupersetClient,
+    resolved_datasets: list[dict],
+    rls_rules: list[dict],
+) -> None:
+    """Adiciona datasets às regras de RLS.
+
+    Oferece modo bulk (todos os datasets para as mesmas regras) ou individual
+    (cada dataset mapeado para regras específicas).
+    """
+    if len(resolved_datasets) > 1:
+        mode = ui.prompt_rls_mode()
+    else:
+        mode = "bulk"
+
+    if mode == "bulk":
+        selected_rules = ui.prompt_select_rls_rules(rls_rules)
+        if not selected_rules:
+            console.print("  [dim]Nenhuma regra selecionada.[/dim]")
+            return
+        all_ids = [d["id"] for d in resolved_datasets]
+        console.print(
+            f"\n[dim]Adicionando {len(all_ids)} dataset(s) a {len(selected_rules)} regra(s) de RLS...[/dim]"
+        )
+        for rule in selected_rules:
+            _apply_rule(client, rule, all_ids)
+
+    else:  # individual
+        console.print()
+        for ds in resolved_datasets:
+            selected_rules = ui.prompt_select_rls_rules(rls_rules, dataset_label=ds["table_name"])
+            if not selected_rules:
+                console.print(f"  [dim]'{ds['table_name']}' ignorado (nenhuma regra selecionada)[/dim]")
+                continue
+            for rule in selected_rules:
+                _apply_rule(client, rule, [ds["id"]])
+
+
+def _apply_rule(client: SupersetClient, rule: dict, dataset_ids: list[int]) -> None:
+    """Aplica uma regra de RLS a uma lista de datasets e exibe o resultado."""
+    rule_id = rule["id"]
+    rule_name = rule.get("name", str(rule_id))
+    try:
+        if client.add_datasets_to_rls_rule(rule_id, dataset_ids):
+            console.print(f"  [green]✓[/green] RLS '{rule_name}' atualizado")
+        else:
+            console.print(f"  [red]✗[/red] RLS '{rule_name}' — falha ao atualizar (verifique os logs)")
+    except Exception as e:
+        logger.log_error(f"_apply_rule: erro para rls_id={rule_id}: {e}")
+        console.print(f"  [red]✗[/red] RLS '{rule_name}' — erro: {str(e)[:80]}")
+
+
+def _add_datasets_to_roles(client: SupersetClient, resolved_datasets: list[dict]) -> None:
+    """Adiciona permissão de acesso aos datasets nos papéis (roles) selecionados pelo usuário."""
+    dataset_ids = [d["id"] for d in resolved_datasets]
+
+    try:
+        roles = client.list_roles()
+        selected_roles = ui.prompt_select_roles(roles) if roles else []
+        if not selected_roles:
+            console.print("  [dim]Nenhum papel selecionado.[/dim]")
+            return
+    except Exception as e:
+        logger.log_error(f"_add_datasets_to_roles: list_roles falhou: {e}")
+        console.print(
+            "\n  [yellow]⚠[/yellow] A listagem automática de papéis não está disponível nesta versão do Superset."
+        )
+        console.print(
+            "  [dim]Para encontrar o ID de um papel: acesse Security → List Roles no Superset,"
+            " clique em Editar e veja o número na URL (ex: /roles/edit/3 → ID é 3)[/dim]"
+        )
+        selected_roles = ui.prompt_manual_role_ids()
+        if not selected_roles:
+            console.print("  [dim]Nenhum papel informado.[/dim]")
+            return
+
+    console.print(
+        f"\n[dim]Adicionando permissões de {len(dataset_ids)} dataset(s) a {len(selected_roles)} papel(is)...[/dim]"
+    )
+    for role in selected_roles:
+        role_id = role["id"]
+        role_name = role.get("name", str(role_id))
+        try:
+            if client.add_dataset_permissions_to_role(role_id, dataset_ids):
+                console.print(f"  [green]✓[/green] Papel '{role_name}' atualizado")
+            else:
+                console.print(
+                    f"  [red]✗[/red] Papel '{role_name}' — falha ao atualizar (verifique os logs)"
+                )
+        except Exception as e:
+            logger.log_error(f"_add_datasets_to_roles: erro para role_id={role_id}: {e}")
+            console.print(f"  [red]✗[/red] Papel '{role_name}' — erro: {str(e)[:80]}")
 
 
 def _interactive_list(cfg: Config):
